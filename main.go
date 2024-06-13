@@ -1,10 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"math/rand"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -17,6 +22,73 @@ import (
 	"github.com/urfave/cli"
 )
 
+type ResourceItem struct {
+	FilePath    string
+	Possibility int
+
+	fileData [][]byte
+	seq      int64
+}
+
+type Resources struct {
+	nameMapping []string
+	data        map[string]*ResourceItem
+}
+
+func (r *Resources) RandomSelect() []byte {
+	resourceIdx := rand.Intn(len(r.nameMapping))
+	item := r.data[r.nameMapping[resourceIdx]]
+	seq := atomic.AddInt64(&item.seq, 1)
+	return item.fileData[int(seq%int64(len(item.fileData)))]
+}
+
+func parseDataSourceFile(fp string) ([][]byte, error) {
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		return nil, fmt.Errorf("read file=%v failed: %w", fp, err)
+	}
+	lines := bytes.Split(data, []byte("\n"))
+	out := make([][]byte, 0, len(lines))
+	for _, item := range lines {
+		item = bytes.TrimSpace(item)
+		n, err := hex.Decode(item, item)
+		if err != nil {
+			return nil, fmt.Errorf("decode data=%d fail", item)
+		}
+		if n > 0 {
+			out = append(out, item[:n])
+		}
+	}
+	return out, nil
+}
+
+func buildResources(fp string) (*Resources, error) {
+	if len(fp) == 0 {
+		return nil, nil
+	}
+	var resources Resources
+	data, err := os.ReadFile(fp)
+	if err != nil {
+		return nil, fmt.Errorf("read file=%v fail: %w", fp, err)
+	}
+	if err := json.Unmarshal(data, &resources.data); err != nil {
+		return nil, fmt.Errorf("parse file=%v fail: %w", fp, err)
+	}
+	mapping := make([]string, 0)
+	for name, item := range resources.data {
+		fileData, err := parseDataSourceFile(item.FilePath)
+		if err != nil {
+			return nil, fmt.Errorf("parse source file=%v failed: %w", name, err)
+		}
+		for i := 0; i < item.Possibility; i++ {
+			mapping = append(mapping, name)
+		}
+		item.fileData = fileData
+	}
+	resources.nameMapping = mapping
+	return &resources, nil
+}
+
 var logger log.Logger
 
 type TxOverload struct {
@@ -24,16 +96,22 @@ type TxOverload struct {
 	BytesPerSecond  int
 	StartTime       time.Time
 	NumDistributors int
+	Resources       *Resources
 }
 
 func (t *TxOverload) generateTxCandidate() (txmgr.TxCandidate, error) {
 	var to common.Address
 
-	data := make([]byte, t.BytesPerSecond)
-	//dur := time.Since(t.StartTime)
-	_, err := rand.Read(data)
-	if err != nil {
-		return txmgr.TxCandidate{}, err
+	var data []byte
+	if t.Resources == nil {
+		data = make([]byte, t.BytesPerSecond)
+		//dur := time.Since(t.StartTime)
+		_, err := rand.Read(data)
+		if err != nil {
+			return txmgr.TxCandidate{}, err
+		}
+	} else {
+		data = t.Resources.RandomSelect()
 	}
 
 	intrinsicGas, err := core.IntrinsicGas(data, nil, false, true, true, false)
@@ -107,6 +185,11 @@ func Main(cliCtx *cli.Context) error {
 		return err
 	}
 
+	resources, err := buildResources(cliCtx.GlobalString(FromFile.Name))
+	if err != nil {
+		return err
+	}
+
 	numDistributors := cliCtx.GlobalInt(NumDistributors.Name)
 	distributors = keys[:numDistributors]
 
@@ -130,6 +213,7 @@ func Main(cliCtx *cli.Context) error {
 		Distrbutor:      distributor,
 		BytesPerSecond:  cliCtx.GlobalInt(DataRateFlag.Name),
 		NumDistributors: numDistributors,
+		Resources:       resources,
 	}
 	go t.Start()
 

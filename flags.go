@@ -27,10 +27,15 @@ var (
 		Value:  20,
 		EnvVar: opservice.PrefixEnvVar(envVarPrefix, "NUM_DISTRIBUTORS"),
 	}
+	FromFile = cli.StringFlag{
+		Name:   "from-file",
+		Value:  "",
+		EnvVar: opservice.PrefixEnvVar(envVarPrefix, "FROM_FILE"),
+	}
 )
 
 func init() {
-	flags = append(flags, EthRpcFlag, DataRateFlag, NumDistributors)
+	flags = append(flags, EthRpcFlag, DataRateFlag, NumDistributors, FromFile)
 	flags = append(flags, oplog.CLIFlags(envVarPrefix)...)
 	flags = append(flags, txmgr.CLIFlags(envVarPrefix)...)
 	flags = append(flags, opmetrics.CLIFlags(envVarPrefix)...)
