@@ -32,10 +32,15 @@ var (
 		Value:  "",
 		EnvVar: opservice.PrefixEnvVar(envVarPrefix, "FROM_FILE"),
 	}
+	MaxBytes = cli.Int64Flag{
+		Name:   "max-bytes",
+		Value:  0,
+		EnvVar: opservice.PrefixEnvVar(envVarPrefix, "MAX_BYTES"),
+	}
 )
 
 func init() {
-	flags = append(flags, EthRpcFlag, DataRateFlag, NumDistributors, FromFile)
+	flags = append(flags, EthRpcFlag, DataRateFlag, NumDistributors, FromFile, MaxBytes)
 	flags = append(flags, oplog.CLIFlags(envVarPrefix)...)
 	flags = append(flags, txmgr.CLIFlags(envVarPrefix)...)
 	flags = append(flags, opmetrics.CLIFlags(envVarPrefix)...)

@@ -97,6 +97,7 @@ type TxOverload struct {
 	StartTime       time.Time
 	NumDistributors int
 	Resources       *Resources
+	MaxBytes        int64
 }
 
 func (t *TxOverload) generateTxCandidate() (txmgr.TxCandidate, error) {
@@ -125,7 +126,7 @@ func (t *TxOverload) generateTxCandidate() (txmgr.TxCandidate, error) {
 	}, nil
 }
 
-func (t *TxOverload) Start() {
+func (t *TxOverload) Start(notify chan struct{}) {
 	ctx := context.Background()
 	t.Distrbutor.Start()
 
@@ -133,6 +134,9 @@ func (t *TxOverload) Start() {
 	tickRate := time.Duration(blockTimeMs/t.NumDistributors) * time.Millisecond
 	ticker := time.NewTicker(tickRate)
 	defer ticker.Stop()
+	defer func() {
+		close(notify)
+	}()
 
 	var backoff = tickRate
 	var backingOff bool
@@ -154,6 +158,9 @@ func (t *TxOverload) Start() {
 		}
 	}
 
+	var totalBytes int64
+	var totalTxNum int64
+
 	for {
 		select {
 		case <-ticker.C:
@@ -166,6 +173,12 @@ func (t *TxOverload) Start() {
 				continue
 			}
 			err = t.Distrbutor.Send(ctx, candidate)
+			totalTxNum += 1
+			totalBytes += int64(len(candidate.TxData))
+			if t.MaxBytes > 0 && totalBytes > t.MaxBytes {
+				logger.Info("exit", "numTx", totalTxNum, "bytes", totalBytes)
+				return
+			}
 			backoffFn(err)
 		case <-ctx.Done():
 			return
@@ -214,8 +227,10 @@ func Main(cliCtx *cli.Context) error {
 		BytesPerSecond:  cliCtx.GlobalInt(DataRateFlag.Name),
 		NumDistributors: numDistributors,
 		Resources:       resources,
+		MaxBytes:        cliCtx.GlobalInt64(MaxBytes.Name),
 	}
-	go t.Start()
+	notify := make(chan struct{})
+	go t.Start(notify)
 
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, []os.Signal{
